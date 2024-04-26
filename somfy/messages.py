@@ -2,11 +2,11 @@
 from binascii import unhexlify
 from typing import List, Optional, Any
 
-from somfy.enumutils import EnumWithMissing, hex_enum
+from somfy.enumutils import enum_or_int, hex_enum, IntEnumWithStr
 
 
 # The destination flag. Only the matching devices will process the message if the flag is set.
-class NodeType(EnumWithMissing):
+class NodeType(IntEnumWithStr):
     TYPE_ALL = 0x00
     TYPE_30DC_SERIES = 0x02
     TYPE_RTS_TRANSMITTER = 0x05
@@ -19,7 +19,7 @@ class NodeType(EnumWithMissing):
 ########################################################################
 # SDN message types defined in the spec for window covers (DOC155888/2)
 ########################################################################
-class SomfyMessageId(EnumWithMissing):
+class SomfyMessageId(IntEnumWithStr):
     GET_NODE_ADDR = 0x40
     POST_NODE_ADDR = 0x60
 
@@ -194,10 +194,10 @@ class SomfyMessage(object):
                  from_node_type: NodeType | int = NodeType.TYPE_ALL, from_addr: SomfyAddress = None,
                  to_node_type: NodeType | int = NodeType.TYPE_ALL, to_addr: SomfyAddress = None,
                  need_ack: bool = False, payload: SomfyPayload = SomfyPayload([])):
-        self.msgid = SomfyMessageId(msgid)
-        self.from_node_type = NodeType(from_node_type)
+        self.msgid = enum_or_int(SomfyMessageId, msgid)
+        self.from_node_type = enum_or_int(NodeType, from_node_type)
         self.from_addr = from_addr
-        self.to_node_type = NodeType(to_node_type)
+        self.to_node_type = enum_or_int(NodeType, to_node_type)
         self.to_addr = to_addr
         self.need_ack = need_ack
         self.payload = payload
@@ -240,7 +240,7 @@ class SomfyMessage(object):
         # First, invert the data (except the checksum) to make parsing easier
         inverted = [~i & 0xFF for i in data[:-2]]
 
-        msg_id = SomfyMessageId(inverted[0])
+        msg_id = enum_or_int(SomfyMessageId, inverted[0])
 
         needs_ack = (inverted[1] & 0x80) != 0
         msg_len = inverted[1] & 0x7F  # Clear the ACK_REQUIRED bit
@@ -248,8 +248,8 @@ class SomfyMessage(object):
         if msg_len != len(data):
             return None  # The length field disagrees with the message length
 
-        from_node_type = NodeType(inverted[2] >> 4 & 0xF)
-        to_node_type = NodeType(inverted[2] & 0xF)
+        from_node_type = enum_or_int(NodeType, inverted[2] >> 4 & 0xF)
+        to_node_type = enum_or_int(NodeType, inverted[2] & 0xF)
 
         from_addr = SomfyAddress.parse_bytes(inverted[3:6])
         to_addr = SomfyAddress.parse_bytes(inverted[6:9])

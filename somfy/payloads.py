@@ -2,9 +2,9 @@
 # Typesafe wrappers for message payloads, based on the SDN Integration Guide
 # (and a bit of reverse engineering).
 ###############################################################################################
-from typing import Optional, List
+from typing import Optional, List, override
 
-from somfy.enumutils import EnumWithMissing
+from somfy.enumutils import enum_or_int, IntEnumWithStr
 from somfy.messages import SomfyPayload, SomfyMessageId, SomfyAddress, register_message_payloads
 
 
@@ -24,7 +24,7 @@ class GroupAddrPayload(SomfyPayload):
     def get_group_id(self):
         return self.content[1] << 16 + self.content[2] << 8 + self.content[3]
 
-    # @override
+    @override
     def as_dict(self):
         return {"group_index": self.get_group_index(), "group_id": self.get_group_id()}
 
@@ -39,7 +39,7 @@ class GroupIndexPayload(SomfyPayload):
     def get_group_index(self):
         return self.content[0]
 
-    # @override
+    @override
     def as_dict(self):
         return {"group_index": self.get_group_index()}
 
@@ -49,7 +49,7 @@ class GroupIndexPayload(SomfyPayload):
 
 
 # Some message processing fault reasons
-class SomfyNackReason(EnumWithMissing):
+class SomfyNackReason(IntEnumWithStr):
     NACK_DATA_OUT_OF_RANGE = 0x01
     NACK_UNKNOWN_MESSAGE = 0x10
     NACK_MESSAGE_LENGTH_ERROR = 0x11
@@ -73,15 +73,17 @@ class SomfyNackReason(EnumWithMissing):
 #     NACK_THRESHOLD_REACHED
 #     NACK_LOW_PRIORITY
 #     NACK_WINK_IN_PROGRESS
+    NACK_IN_SECURITY = 0x27  # Thermal protection, obstacle detection, etc.
+    NACK_LAST_IP_REACHED = 0x28
 
 
 class NackPayload(SomfyPayload):
     expected_lengths = [1]
 
-    def get_nack_code(self) -> SomfyNackReason:
-        return SomfyNackReason(self.content[0])
+    def get_nack_code(self) -> SomfyNackReason | int:
+        return enum_or_int(SomfyNackReason, self.content[0])
 
-    # @override
+    @override
     def as_dict(self):
         return {"nack_code": self.get_nack_code()}
 
@@ -104,7 +106,7 @@ class NodeLabelPayload(SomfyPayload):
     def get_label(self):
         return bytes(self.content).decode('utf-8').strip()
 
-    # @override
+    @override
     def as_dict(self):
         return {"label": self.get_label()}
 
@@ -116,12 +118,12 @@ class NodeLabelPayload(SomfyPayload):
         return NodeLabelPayload([b for b in label_bytes])
 
 
-class SomfyUIFunction(EnumWithMissing):
+class SomfyUIFunction(IntEnumWithStr):
     ENABLE = 0x0
     DISABLE = 0x1
 
 
-class SomfyUIIndex(EnumWithMissing):
+class SomfyUIIndex(IntEnumWithStr):
     ALL_CONTROLS = 0x0
     DCT_INPUT = 0x1
     LOCAL_STIMULI = 0x2
@@ -133,44 +135,44 @@ class SomfyUIIndex(EnumWithMissing):
 class SetLocalUIPayload(SomfyPayload):
     expected_lengths = [3]
 
-    def get_function(self) -> SomfyUIFunction:
-        return SomfyUIFunction(self.content[0])
+    def get_function(self) -> SomfyUIFunction | int:
+        return enum_or_int(SomfyUIFunction, self.content[0])
 
-    def get_ui_index(self) -> SomfyUIIndex:
-        return SomfyUIIndex(self.content[1])
+    def get_ui_index(self) -> SomfyUIIndex | int:
+        return enum_or_int(SomfyUIIndex, self.content[1])
 
     def get_priority(self) -> int:
         return self.content[2]
 
-    # @override
+    @override
     def as_dict(self):
         return {"function": self.get_function(), "ui_index": self.get_ui_index(), "priority": self.get_priority()}
 
     @staticmethod
-    def make(func: SomfyUIIndex, ui_index: SomfyUIIndex, priority: int) -> 'SetLocalUIPayload':
+    def make(func: SomfyUIFunction | int, ui_index: SomfyUIIndex | int, priority: int) -> 'SetLocalUIPayload':
         return SetLocalUIPayload([func, ui_index, priority])
 
 
 class GetLocalUIPayload(SomfyPayload):
     expected_lengths = [1]
 
-    def get_ui_index(self) -> SomfyUIIndex:
-        return SomfyUIIndex(self.content[0])
+    def get_ui_index(self) -> SomfyUIIndex | int:
+        return enum_or_int(SomfyUIIndex, self.content[0])
 
-    # @override
+    @override
     def as_dict(self):
         return {"ui_index": self.get_ui_index()}
 
     @staticmethod
-    def make(ui_index: SomfyUIIndex) -> 'GetLocalUIPayload':
+    def make(ui_index: SomfyUIIndex | int) -> 'GetLocalUIPayload':
         return GetLocalUIPayload([ui_index])
 
 
 class PostLocalUIPayload(SomfyPayload):
     expected_lengths = [5]
 
-    def get_function(self) -> SomfyUIFunction:
-        return SomfyUIFunction(self.content[0])
+    def get_function(self) -> SomfyUIFunction | int:
+        return enum_or_int(SomfyUIFunction, self.content[0])
 
     def get_source_addr(self) -> SomfyAddress:
         return SomfyAddress.parse_bytes(self.content[1:4])
@@ -178,17 +180,17 @@ class PostLocalUIPayload(SomfyPayload):
     def get_priority(self) -> int:
         return self.content[4]
 
-    # @override
+    @override
     def as_dict(self):
         return {"function": self.get_function(),
                 "source_addr": self.get_source_addr(), "priority": self.get_priority()}
 
     @staticmethod
-    def make(func: SomfyUIFunction, source_address: SomfyAddress, priority: int) -> 'PostLocalUIPayload':
+    def make(func: SomfyUIFunction | int, source_address: SomfyAddress, priority: int) -> 'PostLocalUIPayload':
         return PostLocalUIPayload([func] + source_address.serialize() + [priority])
 
 
-class SomfyMotorIPFunction(EnumWithMissing):
+class SomfyMotorIPFunction(IntEnumWithStr):
     DELETE = 0x0
     SET_IP_AT_CURRENT = 0x01
     SET_IP_AT_SPECIFIED_PERCENT = 0x03  # Tilt value is ignored
@@ -203,8 +205,8 @@ class SetMotorIPPayload(SomfyPayload):
 
     IP_POSITION_UNDEFINED = 0xFFFF
 
-    def get_function(self) -> SomfyMotorIPFunction:
-        return SomfyMotorIPFunction(self.content[0])
+    def get_function(self) -> SomfyMotorIPFunction | int:
+        return enum_or_int(SomfyMotorIPFunction, self.content[0])
 
     def get_ip_index(self) -> int:
         return self.content[1]
@@ -217,13 +219,14 @@ class SetMotorIPPayload(SomfyPayload):
             return None
         return self.content[5] << 8 | self.content[4]
 
-    # @override
+    @override
     def as_dict(self):
         return {"function": self.get_function(), "ip_index": self.get_ip_index(), "position": self.get_position(),
                 "angle": self.get_angle()}
 
     @staticmethod
-    def make(func: SomfyUIFunction, ip_index: int, position: int, angle: Optional[int]) -> 'SetMotorIPPayload':
+    def make(func: SomfyMotorIPFunction | int, ip_index: int, position: int,
+             angle: Optional[int]) -> 'SetMotorIPPayload':
         angle_list = [angle >> 8 & 0xFF, angle & 0xFF] if angle else []
         return SetMotorIPPayload([func, ip_index, position >> 8 & 0xFF, position & 0xFF] + angle_list)
 
@@ -234,7 +237,7 @@ class GetMotorIPPayload(SomfyPayload):
     def get_ip_index(self):
         return self.content[0]
 
-    # @override
+    @override
     def as_dict(self):
         return {"ip_index": self.get_ip_index()}
 
@@ -261,7 +264,7 @@ class PostMotorIPPayload(SomfyPayload):
         angle = self.content[8] << 8 | self.content[7]
         return angle
 
-    # @override
+    @override
     def as_dict(self):
         return {"ip_index": self.get_ip_index(), "position": self.get_position(), "angle": self.get_angle()}
 
@@ -283,7 +286,7 @@ class MotorSpeedPayload(SomfyPayload):
     def get_slow_speed_rpm(self) -> int:
         return self.content[2]
 
-    # @override
+    @override
     def as_dict(self):
         return {"up_speed_rpm": self.get_up_speed_rpm(), "down_speed_rpm": self.get_down_speed_rpm(),
                 "slow_speed_rpm": self.get_slow_speed_rpm()}
@@ -293,7 +296,7 @@ class MotorSpeedPayload(SomfyPayload):
         return MotorSpeedPayload([up_speed_rpm, down_speed_rpm, slow_speed_rpm])
 
 
-class LockNetworkFunction(EnumWithMissing):
+class LockNetworkFunction(IntEnumWithStr):
     UNLOCK = 0x00
     LOCK = 0x01
     PRESERVE_LOCK_ON_POWER_CYCLE = 0x03  # Priority is ignored
@@ -303,19 +306,19 @@ class LockNetworkFunction(EnumWithMissing):
 class SetNetworkLockPayload(SomfyPayload):
     expected_lengths = [2]
 
-    def get_function(self) -> LockNetworkFunction:
-        return LockNetworkFunction(self.content[0])
+    def get_function(self) -> LockNetworkFunction | int:
+        return enum_or_int(LockNetworkFunction, self.content[0])
 
     def get_priority(self) -> int:
         return self.content[1]
 
-    # @override
+    @override
     def as_dict(self):
         return {"function": self.get_function(), "priority": self.get_priority()}
 
     @staticmethod
-    def make(function: LockNetworkFunction, priority: int) -> 'SetNetworkLockPayload':
-        return SetNetworkLockPayload([function, priority])
+    def make(func: LockNetworkFunction | int, priority: int) -> 'SetNetworkLockPayload':
+        return SetNetworkLockPayload([func, priority])
 
 
 class PostNetworkLockPayload(SomfyPayload):
@@ -333,7 +336,7 @@ class PostNetworkLockPayload(SomfyPayload):
     def is_persistent_across_power_cycle(self) -> bool:
         return self.content[5] != 0
 
-    # @override
+    @override
     def as_dict(self):
         return {"is_locked": self.is_locked(), "lock_holder": self.get_lock_holder(), "priority": self.get_priority(),
                 "is_persistent_across_power_cycle": self.is_persistent_across_power_cycle()}
@@ -345,7 +348,7 @@ class PostNetworkLockPayload(SomfyPayload):
                                        int(persistent_across_power_cycle)])
 
 
-class CtrlMoveToFunction(EnumWithMissing):
+class CtrlMoveToFunction(IntEnumWithStr):
     DOWN_LIMIT = 0x00  # Position and angle are ignored
     UP_LIMIT = 0x01  # Position and angle are ignored
     IP = 0x02  # Position contains the Intermediate Position index
@@ -359,8 +362,8 @@ class CtrlMoveToFunction(EnumWithMissing):
 class CtrlMoveToPayload(SomfyPayload):
     expected_lengths = [4, 6]
 
-    def get_function(self) -> CtrlMoveToFunction:
-        return CtrlMoveToFunction(self.content[0])
+    def get_function(self) -> CtrlMoveToFunction | int:
+        return enum_or_int(CtrlMoveToFunction, self.content[0])
 
     def get_position(self) -> int:
         return self.content[2] << 8 | self.content[1]
@@ -370,12 +373,12 @@ class CtrlMoveToPayload(SomfyPayload):
             return None
         return self.content[5] << 8 | self.content[4]
 
-    # @override
+    @override
     def as_dict(self):
         return {"function": self.get_function(), "position": self.get_position(), "angle": self.get_angle()}
 
     @staticmethod
-    def make(func: CtrlMoveToFunction, position: int, angle: Optional[int] = None) -> 'CtrlMoveToPayload':
+    def make(func: CtrlMoveToFunction | int, position: int, angle: Optional[int] = None) -> 'CtrlMoveToPayload':
         angle_list = [angle & 0xFF, angle >> 8 & 0xFF] if angle else []
         return CtrlMoveToPayload([func, position & 0xFF, position >> 8 & 0xFF, 0] + angle_list)
 
@@ -386,7 +389,7 @@ class CtrlStopPayload(SomfyPayload):
     def get_reserved(self) -> int:
         return self.content[0]
 
-    # @override
+    @override
     def as_dict(self):
         return {"reserved": self.get_reserved()}
 
@@ -420,7 +423,7 @@ class PostMotorPositionPayload(SomfyPayload):
             return None
         return self.content[8] << 8 | self.content[7]
 
-    # @override
+    @override
     def as_dict(self):
         return {"position_pulses": self.get_position_pulses(), "position_percent": self.get_position_percent(),
                 "tilt_percent": self.get_tilt_percent(), "ip": self.get_ip(), "tilt_degrees": self.get_tilt_degrees()}
@@ -433,26 +436,26 @@ class PostMotorPositionPayload(SomfyPayload):
             [position_pulses & 0xFF, position_pulses >> 8 & 0xFF, position_percent, tilt_percent, ip] + angle_list)
 
 
-class MotorStatus(EnumWithMissing):
+class MotorStatus(IntEnumWithStr):
     STOPPED = 0x00
     RUNNING = 0x01
     BLOCKED = 0x02  # Blocked from movement by an obstacle or thermal protection
     LOCKED = 0x03  # Locked by another device
 
 
-class MotorDirection(EnumWithMissing):
+class MotorDirection(IntEnumWithStr):
     DOWN = 0x00
     UP = 0x01
     UNKNOWN = 0xFF
 
 
-class MotorCommandSource(EnumWithMissing):
+class MotorCommandSource(IntEnumWithStr):
     INTERNAL = 0x00  # Limit/IP/Position reached, Over-current, obstacle detection, thermal protection, ...
     NETWORK_MESSAGE = 0x01  # Any message received from the SDN bus
     LOCAL_UI = 0x02  # DCT, Local stimulus, local wireless
 
 
-class MotorStatusCause(EnumWithMissing):
+class MotorStatusCause(IntEnumWithStr):
     TARGET_REACHED = 0x00  # Successful completion of a command
     EXPLICIT_COMMAND = 0x01  # Network or Local UI command
     WINK = 0x02
@@ -467,26 +470,26 @@ class MotorStatusCause(EnumWithMissing):
 class PostMotorStatusPayload(SomfyPayload):
     expected_lengths = [4]
 
-    def get_status(self) -> MotorStatus:
-        return MotorStatus(self.content[0])
+    def get_status(self) -> MotorStatus | int:
+        return enum_or_int(MotorStatus, self.content[0])
 
-    def get_direction(self) -> MotorDirection:
-        return MotorDirection(self.content[1])
+    def get_direction(self) -> MotorDirection | int:
+        return enum_or_int(MotorDirection, self.content[1])
 
-    def get_command_source(self) -> MotorCommandSource:
-        return MotorCommandSource(self.content[2])
+    def get_command_source(self) -> MotorCommandSource | int:
+        return enum_or_int(MotorCommandSource, self.content[2])
 
-    def get_status_cause(self) -> MotorStatusCause:
-        return MotorStatusCause(self.content[3])
+    def get_status_cause(self) -> MotorStatusCause | int:
+        return enum_or_int(MotorStatusCause, self.content[3])
 
-    # @override
+    @override
     def as_dict(self):
         return {"status": self.get_status(), "direction": self.get_direction(),
                 "command_source": self.get_command_source(), "status_cause": self.get_status_cause()}
 
     @staticmethod
-    def make(status: MotorStatus, direction: MotorDirection, source: MotorCommandSource,
-             cause: MotorStatusCause) -> 'PostMotorStatusPayload':
+    def make(status: MotorStatus | int, direction: MotorDirection | int, source: MotorCommandSource | int,
+             cause: MotorStatusCause | int) -> 'PostMotorStatusPayload':
         return PostMotorStatusPayload([status, direction, source, cause])
 
 
@@ -494,7 +497,7 @@ class PostMotorStatusPayload(SomfyPayload):
 # Reverse-engineered payloads
 #############################################################################################
 
-class SomfyDirection(EnumWithMissing):
+class SomfyDirection(IntEnumWithStr):
     DOWN = 0x00
     UP = 0x01
 
@@ -502,8 +505,8 @@ class SomfyDirection(EnumWithMissing):
 class CtrlMoveForcedPayload(SomfyPayload):
     expected_lengths = [3]
 
-    def get_direction(self) -> SomfyDirection:
-        return SomfyDirection(self.content[0])
+    def get_direction(self) -> SomfyDirection | int:
+        return enum_or_int(SomfyDirection, self.content[0])
 
     # The movement duration in the units of 10ms
     def get_tens_of_ms(self) -> int:
@@ -517,7 +520,7 @@ class CtrlMoveForcedPayload(SomfyPayload):
         return CtrlMoveForcedPayload([direction, tens_of_ms & 0xFF, tens_of_ms >> 8 & 0xFF])
 
 
-class RelativeMoveFunction(EnumWithMissing):
+class RelativeMoveFunction(IntEnumWithStr):
     MOVE_NEXT_IP_DOWN = 0x00
     MOVE_NEXT_IP_UP = 0x01
     MOVE_NUM_PULSES_DOWN = 0x02
@@ -529,8 +532,8 @@ class RelativeMoveFunction(EnumWithMissing):
 class CtrlMoveRelativePayload(SomfyPayload):
     expected_lengths = [4]
 
-    def get_function(self) -> RelativeMoveFunction:
-        return RelativeMoveFunction(self.content[0])
+    def get_function(self) -> RelativeMoveFunction | int:
+        return enum_or_int(RelativeMoveFunction, self.content[0])
 
     def get_parameter(self) -> int:
         return self.content[2] >> 8 | self.content[1]
@@ -539,11 +542,11 @@ class CtrlMoveRelativePayload(SomfyPayload):
         return {"function": self.get_function(), "parameter": self.get_parameter()}
 
     @staticmethod
-    def make(function: RelativeMoveFunction, parameter: int) -> 'CtrlMoveRelativePayload':
-        return CtrlMoveRelativePayload([function, parameter & 0xFF, parameter >> 8 & 0xFF, 0])
+    def make(func: RelativeMoveFunction | int, parameter: int) -> 'CtrlMoveRelativePayload':
+        return CtrlMoveRelativePayload([func, parameter & 0xFF, parameter >> 8 & 0xFF, 0])
 
 
-class SetLimitsFunction(EnumWithMissing):
+class SetLimitsFunction(IntEnumWithStr):
     SET_AT_CURRENT = 0x01
     SET_AT_PULSE_COUNT = 0x02  # At the specified pulse count
     ADJUST_BY_TENS_OF_MS = 0x04  # Adjust up or down by N*10 milliseconds
@@ -553,16 +556,16 @@ class SetLimitsFunction(EnumWithMissing):
 class SetMotorLimitsPayload(SomfyPayload):
     expected_lengths = [4]
 
-    def get_function(self) -> SetLimitsFunction:
-        return SetLimitsFunction(self.content[0])
+    def get_function(self) -> SetLimitsFunction | int:
+        return enum_or_int(SetLimitsFunction, self.content[0])
 
-    def get_direction(self) -> SomfyDirection:
-        return SomfyDirection(self.content[1])
+    def get_direction(self) -> SomfyDirection | int:
+        return enum_or_int(SomfyDirection, self.content[1])
 
     def get_parameter(self) -> int:
         return self.content[3] << 8 | self.content[2]
 
-    # @override
+    @override
     def as_dict(self):
         return {"function": self.get_function(), "direction": self.get_direction(), "parameter": self.get_parameter()}
 
@@ -580,7 +583,7 @@ class PostMotorLimitsPayload(SomfyPayload):
     def get_limit(self) -> int:
         return self.content[3] << 8 | self.content[2] & 0xFF
 
-    # @override
+    @override
     def as_dict(self):
         return {"reserved": self.get_reserved(), "limit": self.get_limit()}
 
@@ -589,7 +592,7 @@ class PostMotorLimitsPayload(SomfyPayload):
         return PostMotorLimitsPayload([0, 0, limit & 0xFF, limit >> 8 & 0xFF])
 
 
-class MotorRotationDirection(EnumWithMissing):
+class MotorRotationDirection(IntEnumWithStr):
     STANDARD = 0x00
     REVERSED = 0x01
 
@@ -597,14 +600,14 @@ class MotorRotationDirection(EnumWithMissing):
 class MotorRotationDirectionPayload(SomfyPayload):
     expected_lengths = [1]
 
-    def get_direction(self) -> MotorRotationDirection:
-        return MotorRotationDirection(self.content[0])
+    def get_direction(self) -> MotorRotationDirection | int:
+        return enum_or_int(MotorRotationDirection, self.content[0])
 
     def as_dict(self):
         return {"direction": self.get_direction()}
 
     @staticmethod
-    def make(direction: MotorRotationDirection) -> 'MotorRotationDirectionPayload':
+    def make(direction: MotorRotationDirection | int) -> 'MotorRotationDirectionPayload':
         return MotorRotationDirectionPayload([direction])
 
 

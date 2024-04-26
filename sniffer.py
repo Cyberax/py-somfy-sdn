@@ -4,17 +4,17 @@ import json
 from optparse import OptionParser
 from typing import Optional
 
-from somfy.connector import SomfyConnector, SocketChannel
+from somfy.connector import SomfyConnector, SocketConnectionFactory, ReconnectingSomfyConnector
 from somfy.messages import SomfyMessage, SomfyAddress
-from somfy.serial import SerialChannel
+from somfy.serial import SerialConnectionFactory
 
 
 async def sniff(opts):
     if opts.tcp:
         host, port = opts.tcp.split(":")
-        ch = SocketChannel(host=host, port=port)
+        ch = SocketConnectionFactory(host=host, port=port)
     elif opts.serial:
-        ch = SerialChannel(opts.serial)
+        ch = SerialConnectionFactory(opts.serial)
     else:
         raise Exception("Neither --tcp nor --serial options specified")
 
@@ -32,10 +32,11 @@ async def sniff(opts):
         else:
             print(msg.__str__())
 
-    async with ch:
-        async with SomfyConnector(ch, sniffer_callback=on_message):
-            while True:
-                await asyncio.sleep(1)
+    async with ReconnectingSomfyConnector(ch, sniffer_callback=on_message) as conn:
+        try:
+            await conn.done_notification()
+        except asyncio.CancelledError:
+            pass
 
 
 if __name__ == '__main__':

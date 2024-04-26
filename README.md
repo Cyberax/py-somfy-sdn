@@ -10,21 +10,23 @@ The library supports both directly-connected RS-485 adapters (typically implemen
 connections via Ethernet-to-Serial converters. The library properly implements the timing restrictions specified
 in the SDN Integration Guide, with full `asyncio` support.
 
-To use the library, create a channel, a connector, and then exchange the messages:
+To use the library, create a connection factory, a connector, and then exchange the messages:
 
 ```python
-from somfy import SocketChannel
-ch = SocketChannel(host=host, port=port)
-async with ch:
-    async with SomfyConnector(ch) as conn:
-        await conn.do_exchange(...)
-        await conn.do_exchange(...)
-        await conn.do_exchange(...)
+from somfy import SocketConnectionFactory, SomfyConnector
+ch = SocketConnectionFactory(host=host, port=port)
+async with SomfyConnector(ch) as conn:
+    await conn.exchange(...)
+    await conn.exchange(...)
+    await conn.exchange(...)
 ```
 
 The channel (socket or serial) is physically opened in the context manager's `__aenter__` and freed in the `__aexit__`,
-there is no support for reconnection. If the socket is closed or the serial device becomes unavailable, you need to
-close the `SomfyConnector`, `Channel`, and then create new ones.
+there is no support for reconnection. Alternatively, `start` and `stop` methods can be used to control the connection. 
+
+If the socket is closed or the serial device becomes unavailable, you need to close the `SomfyConnector`,
+and then create a new one. Alternatively, you can use automatically reconnecting `ReconnectingSomfyConnector`. It
+will automatically reconnect the channel if it's closed, but it will NOT retry any failed `exchange` calls.
 
 `SomfyConnector` is stateless, but it launches a background task that drains the data from the SDN bus. You can
 optionally specify a `sniffer_callback` that will be called each time the "drainer" task recognizes a valid SDN 
