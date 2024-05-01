@@ -366,9 +366,12 @@ class ReconnectingSomfyConnector(SomfyExchanger):
     @override
     async def exchange(self, to_send: Optional[SomfyMessage],
                        msg_consumer: Optional[Callable[[SomfyMessage], bool]]) -> bool:
-        async with asyncio.timeout(self.timeout):
-            async with self.lock:
-                return await self.connector.exchange(to_send, msg_consumer)
+        try:
+            async with asyncio.timeout(self.timeout):
+                async with self.lock:
+                    return await self.connector.exchange(to_send, msg_consumer)
+        except asyncio.TimeoutError:
+            return False
 
 
 async def fire_and_forget(conn: SomfyExchanger, to_send: SomfyMessage):

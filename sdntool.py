@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import asyncio
 import typing
-from asyncio import get_event_loop
 from optparse import OptionParser
 
 from somfy.connector import SomfyConnector, SocketConnectionFactory, fire_and_forget, detect_devices, \
@@ -9,8 +8,8 @@ from somfy.connector import SomfyConnector, SocketConnectionFactory, fire_and_fo
 from somfy.enumutils import hex_enum
 from somfy.messages import SomfyMessage, SomfyMessageId, MASTER_ADDRESS, NodeType, SomfyAddress
 from somfy.payloads import MotorRotationDirectionPayload, PostMotorLimitsPayload, PostMotorPositionPayload, \
-    CtrlMoveToPayload, CtrlMoveToFunction, CtrlStopPayload, NackPayload, CtrlMoveRelativePayload, RelativeMoveFunction, \
-    PostMotorStatusPayload, SomfyNackReason
+    CtrlMoveToPayload, CtrlMoveToFunction, CtrlStopPayload, CtrlMoveRelativePayload, RelativeMoveFunction, \
+    PostMotorStatusPayload, SomfyNackReason, MotorRotationDirection
 from somfy.serial import SerialConnectionFactory
 from somfy.utils import wait_for_completion, SomfyNackException, move_with_ack
 
@@ -119,6 +118,30 @@ async def do_stop(connector: SomfyConnector, opts):
     await fire_and_forget(connector, stop_msg)
 
 
+async def do_invert(connector: SomfyConnector, opts):
+    if not opts.addr:
+        raise Exception("No --addr specified")
+
+    addr = SomfyAddress.make(opts.addr)
+    reply = await try_to_exchange_one(connector, addr, SomfyMessageId.GET_MOTOR_ROTATION_DIRECTION,
+                                      SomfyMessageId.POST_MOTOR_ROTATION_DIRECTION)
+    if not reply:
+        raise Exception("Failed to get motor rotation direction")
+    rot = typing.cast(MotorRotationDirectionPayload, reply.payload)
+
+    if rot.get_direction() == MotorRotationDirection.STANDARD:
+        new_payload = MotorRotationDirectionPayload.make(direction=MotorRotationDirection.REVERSED)
+    else:
+        new_payload = MotorRotationDirectionPayload.make(direction=MotorRotationDirection.STANDARD)
+
+    addr = SomfyAddress.make(opts.addr)
+    change = SomfyMessage(msgid=SomfyMessageId.SET_MOTOR_ROTATION_DIRECTION, need_ack=True,
+                          from_node_type=NodeType.TYPE_ALL, from_addr=MASTER_ADDRESS,
+                          to_node_type=NodeType.TYPE_ALL, to_addr=addr, payload=new_payload)
+    await move_with_ack(addr, connector, change)
+    await do_info(connector, opts)
+
+
 async def run(opts, cmd):
     if opts.tcp:
         host, port = opts.tcp.split(":")
@@ -141,12 +164,14 @@ async def run(opts, cmd):
             await do_move_ip(connector, opts, True)
         elif cmd == "up_step":
             await do_move_ip(connector, opts, False)
+        elif cmd == "invert_direction":
+            await do_invert(connector, opts)
         else:
             raise Exception("Unknown command")
 
 
 if __name__ == '__main__':
-    parser = OptionParser("sdntool.py [options] detect|info|move|stop|down_step|up_step")
+    parser = OptionParser("sdntool.py [options] detect|info|move|stop|down_step|up_step|invert_direction")
     parser.add_option("--tcp", dest="tcp",
                       help="use the TCP endpoint for the Somfy connection (host:port)")
     parser.add_option("--serial", dest="serial",
