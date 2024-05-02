@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from asyncio import events, StreamReader, StreamWriter, Future, InvalidStateError
 from types import TracebackType
@@ -91,7 +92,13 @@ class _Channel(object):
             loop = asyncio.get_running_loop()
             try:
                 chunk = await self.reader.readexactly(1)
-            except Exception:
+            except asyncio.TimeoutError:
+                # Nothing special for timeouts
+                raise
+            except asyncio.CancelledError:
+                # Nothing special for cancels
+                raise
+            except BaseException as exc:
                 self._do_close()
                 raise
             self.last_activity = loop.time()
@@ -119,7 +126,7 @@ class _Channel(object):
 # get blocked once the read buffer overflows. It additionally can attempt to parse the bus traffic and
 # look for valid Somfy SDN messages.
 class _Drainer(object):
-    def __init__(self, channel: _Channel, lock: asyncio.Lock, need_to_talk: asyncio.Event, done_notifier: Future[bool],
+    def __init__(self, channel: _Channel, lock: asyncio.Lock, need_to_talk: asyncio.Event, done_notifier: asyncio.Event,
                  sniffer_callback: Callable[[SomfyMessage], None] = None):
         self.channel = channel
         self.lock = lock
@@ -135,12 +142,8 @@ class _Drainer(object):
         except asyncio.CancelledError:
             # Cancellation is normal, don't log it
             pass
-        except BaseException as ex:
-            try:
-                self.done_notifier.set_exception(ex)
-            except InvalidStateError:
-                pass
-            raise ex
+        finally:
+            self.done_notifier.set()
 
     async def attempt_drain(self):
         async with self.lock:
@@ -201,7 +204,11 @@ class SomfyExchanger(ABC):
         pass
 
     @abstractmethod
-    def done_notification(self) -> Future[bool]:
+    def started(self) -> bool:
+        pass
+
+    @abstractmethod
+    def done_notification(self) -> asyncio.Event:
         pass
 
 
@@ -213,11 +220,12 @@ class SomfyConnector(SomfyExchanger):
         self.reader_lock = asyncio.Lock()
         self.need_to_talk = asyncio.Event()
         self.writer_lock = asyncio.Lock()
-        self.done_notify = asyncio.Future[bool]()
+        self.done_notify = asyncio.Event()
         self.drainer = _Drainer(self.channel, self.reader_lock, self.need_to_talk, self.done_notify, sniffer_callback)
         self.timeout = COMMUNICATION_TIMEOUT_SEC
         self.last_write_time = 0
         self.drainer_task: Optional[asyncio.Task] = None
+        self._started = False
 
     async def __aenter__(self) -> "SomfyConnector":
         # We don't need to open the channel here, the drainer will do that for us in background
@@ -230,24 +238,27 @@ class SomfyConnector(SomfyExchanger):
         return None
 
     @override
+    def started(self) -> bool:
+        return self._started
+
+    @override
     async def start(self):
         await self.channel.start()
         assert self.drainer_task is None
         self.drainer_task = asyncio.create_task(name="SDNBusDrainer", coro=self.drainer.run_loop())
+        self._started = True
 
     @override
     async def stop(self):
         await self.channel.close()
-        self.drainer_task.cancel()
-        await self.drainer_task
-        self.drainer_task = None
-        try:
-            self.done_notify.set_result(True)
-        except InvalidStateError:
-            pass
+        if self.drainer_task is not None:
+            self.drainer_task.cancel()
+            await self.drainer_task
+            self.drainer_task = None
+        self.done_notify.set()
 
     @override
-    def done_notification(self) -> Future[bool]:
+    def done_notification(self) -> asyncio.Event:
         return self.done_notify
 
     # Run the message exchange. `msg_consumer` callback is called for each message, it should return `True` if
@@ -256,8 +267,10 @@ class SomfyConnector(SomfyExchanger):
     # Returns False if the timeout expires before `msg_consumer` signals that it's done.
     @override
     async def exchange(self, to_send: Optional[SomfyMessage],
-                       msg_consumer: Optional[Callable[[SomfyMessage], bool]]) -> bool:
+                       msg_consumer: Optional[Callable[[SomfyMessage], bool]]):
         async with self.writer_lock:
+            if self.done_notify.is_set():
+                raise Exception("Reader channel is closed")
             # Signal the drainer task that we want to talk with the SDN network and that it needs to stop
             # draining the data.
             self.need_to_talk.set()
@@ -265,15 +278,6 @@ class SomfyConnector(SomfyExchanger):
                 async with self.reader_lock:
                     async with asyncio.timeout(self.timeout):
                         await self._do_exchange(to_send, msg_consumer)
-                        return True
-            except asyncio.TimeoutError:
-                return False
-            except BaseException as ex:
-                try:
-                    self.done_notify.set_exception(ex)
-                except InvalidStateError:
-                    pass
-                raise ex
             finally:
                 self.need_to_talk.clear()
 
@@ -296,17 +300,22 @@ class SomfyConnector(SomfyExchanger):
 
 
 class ReconnectingSomfyConnector(SomfyExchanger):
-    def __init__(self, connection_factory: ConnectionFactory, sniffer_callback: Callable[[SomfyMessage], None] = None,
-                 backoff_policy: BackoffPolicy = BackoffPolicy()):
-        self.done_notify = asyncio.Future[bool]()
+    def __init__(self, connection_factory: ConnectionFactory,
+                 sniffer_callback: Callable[[SomfyMessage], None] = None,
+                 backoff_policy: BackoffPolicy = BackoffPolicy(),
+                 logger: logging.Logger = logging.getLogger("ReconnectingSomfyConnector")):
+        self.done_notify = asyncio.Event()
         self.backoff_policy = backoff_policy
         self.connection_factory = connection_factory
         self.sniffer_callback = sniffer_callback
-        self.connector = SomfyConnector(self.connection_factory, self.sniffer_callback)
+        self.connector: Optional[SomfyConnector] = None
         self.lock = asyncio.Lock()
         self.connector_task: Optional[asyncio.Task] = None
-        self.done_notify = asyncio.Future[bool]()
+        self.done_notify = asyncio.Event()
         self.timeout = COMMUNICATION_TIMEOUT_SEC
+        self._started = False
+        self.startup_complete = asyncio.Event()
+        self.logger = logger
 
     async def __aenter__(self) -> "ReconnectingSomfyConnector":
         # We don't need to open the channel here, the drainer will do that for us in background
@@ -318,11 +327,14 @@ class ReconnectingSomfyConnector(SomfyExchanger):
         await self.stop()
         return None
 
+    def started(self) -> bool:
+        return self._started
+
     @override
     async def start(self):
         async with self.lock:
-            await self.connector.start()
             self.connector_task = asyncio.create_task(name="SomfyReconnect", coro=self._reconnect())
+            self._started = True
 
     @override
     async def stop(self):
@@ -330,48 +342,54 @@ class ReconnectingSomfyConnector(SomfyExchanger):
         await self.connector_task
         async with self.lock:
             try:
-                await self.connector.stop()
-                self.done_notify.set_result(True)
+                if self.connector is not None:
+                    await self.connector.stop()
             except InvalidStateError:
                 pass
-            except BaseException as ex:
-                try:
-                    self.done_notify.set_exception(ex)
-                except InvalidStateError:
-                    pass
-                raise ex
+            finally:
+                self.done_notify.set()
 
     @override
-    def done_notification(self) -> Future[bool]:
+    def done_notification(self) -> asyncio.Event:
         return self.done_notify
+
+    def startup_complete_notification(self) -> asyncio.Event:
+        return self.startup_complete
 
     async def _reconnect(self):
         while not asyncio.current_task().cancelling():
-            # noinspection PyBroadException
-            try:
-                await self.connector.done_notification()
-            except BaseException:
-                pass
-            async with self.lock:
-                while True:
-                    await asyncio.sleep(self.backoff_policy.get_wait_time_sec_after_a_failure())
-                    self.connector = SomfyConnector(self.connection_factory, self.sniffer_callback)
-                    try:
-                        await self.connector.start()
-                        self.backoff_policy.success()
-                        break
-                    except OSError:
-                        pass
+            # Wait for the connector to signal that it's done (due to an error)
+            if self.connector is not None:
+                # noinspection PyBroadException
+                try:
+                    await self.connector.done_notification().wait()
+                except BaseException:
+                    pass
+            await self._try_connect()
+
+    async def _try_connect(self):
+        async with self.lock:
+            while not asyncio.current_task().cancelling():
+                connector = SomfyConnector(self.connection_factory, self.sniffer_callback)
+                # noinspection PyBroadException
+                try:
+                    await connector.start()
+                    self.backoff_policy.success()
+                    self.connector = connector
+                    self.startup_complete.set()
+                    break
+                except BaseException as ex:
+                    self.logger.warning("Failed to connect", exc_info=True)
+                    pass
+                await asyncio.sleep(self.backoff_policy.get_wait_time_sec_after_a_failure())
 
     @override
     async def exchange(self, to_send: Optional[SomfyMessage],
-                       msg_consumer: Optional[Callable[[SomfyMessage], bool]]) -> bool:
-        try:
-            async with asyncio.timeout(self.timeout):
-                async with self.lock:
-                    return await self.connector.exchange(to_send, msg_consumer)
-        except asyncio.TimeoutError:
-            return False
+                       msg_consumer: Optional[Callable[[SomfyMessage], bool]]):
+        async with asyncio.timeout(self.timeout):
+            await self.startup_complete.wait()
+            async with self.lock:
+                await self.connector.exchange(to_send, msg_consumer)
 
 
 async def fire_and_forget(conn: SomfyExchanger, to_send: SomfyMessage):
@@ -394,7 +412,10 @@ async def detect_devices(conn: SomfyExchanger,
         return True
 
     # We expect to end up with the timeout error here, as we try to gather all the replies
-    await conn.exchange(detect_nodes, gather_addr)
+    try:
+        await conn.exchange(detect_nodes, gather_addr)
+    except asyncio.TimeoutError:
+        pass
 
     return nodes
 
@@ -415,6 +436,9 @@ async def try_to_exchange_one(conn: SomfyExchanger, addr: SomfyAddress, msgid: S
 
     sent = SomfyMessage(msgid=msgid, from_node_type=NodeType.TYPE_ALL, from_addr=MASTER_ADDRESS,
                         to_node_type=NodeType.TYPE_ALL, to_addr=addr, payload=payload)
-    await conn.exchange(sent, filter_type)
+    try:
+        await conn.exchange(sent, filter_type)
+    except asyncio.TimeoutError:
+        pass
 
     return result

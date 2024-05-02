@@ -4,14 +4,14 @@ import typing
 from optparse import OptionParser
 
 from somfy.connector import SomfyConnector, SocketConnectionFactory, fire_and_forget, detect_devices, \
-    try_to_exchange_one
+    try_to_exchange_one, ReconnectingSomfyConnector
 from somfy.enumutils import hex_enum
 from somfy.messages import SomfyMessage, SomfyMessageId, MASTER_ADDRESS, NodeType, SomfyAddress
 from somfy.payloads import MotorRotationDirectionPayload, PostMotorLimitsPayload, PostMotorPositionPayload, \
     CtrlMoveToPayload, CtrlMoveToFunction, CtrlStopPayload, CtrlMoveRelativePayload, RelativeMoveFunction, \
     PostMotorStatusPayload, SomfyNackReason, MotorRotationDirection
 from somfy.serial import SerialConnectionFactory
-from somfy.utils import wait_for_completion, SomfyNackException, move_with_ack
+from somfy.utils import wait_for_completion, SomfyNackException, send_with_ack
 
 
 async def do_detect(connector: SomfyConnector):
@@ -73,7 +73,7 @@ async def do_move(connector: SomfyConnector, opts):
     sent = SomfyMessage(msgid=SomfyMessageId.CTRL_MOVETO, need_ack=True,
                         from_node_type=NodeType.TYPE_ALL, from_addr=MASTER_ADDRESS,
                         to_node_type=NodeType.TYPE_ALL, to_addr=addr, payload=payload)
-    await move_with_ack(addr, connector, sent)
+    await send_with_ack(addr, connector, sent)
 
     def print_pos(p):
         print("Position: %d%% (pulses: %d), IP=%d" % (p.get_position_percent(), p.get_position_pulses(),
@@ -93,7 +93,7 @@ async def do_move_ip(connector, opts, move_down):
                         from_node_type=NodeType.TYPE_ALL, from_addr=MASTER_ADDRESS,
                         to_node_type=NodeType.TYPE_ALL, to_addr=addr, payload=payload)
     try:
-        await move_with_ack(addr, connector, sent)
+        await send_with_ack(addr, connector, sent)
     except SomfyNackException as e:
         if e.nack().get_nack_code() == SomfyNackReason.NACK_LAST_IP_REACHED:
             opts.percent = 100 if move_down else 0.0
@@ -138,7 +138,7 @@ async def do_invert(connector: SomfyConnector, opts):
     change = SomfyMessage(msgid=SomfyMessageId.SET_MOTOR_ROTATION_DIRECTION, need_ack=True,
                           from_node_type=NodeType.TYPE_ALL, from_addr=MASTER_ADDRESS,
                           to_node_type=NodeType.TYPE_ALL, to_addr=addr, payload=new_payload)
-    await move_with_ack(addr, connector, change)
+    await send_with_ack(addr, connector, change)
     await do_info(connector, opts)
 
 
@@ -151,7 +151,7 @@ async def run(opts, cmd):
     else:
         raise Exception("Neither --tcp nor --serial options specified")
 
-    async with SomfyConnector(ch) as connector:
+    async with ReconnectingSomfyConnector(ch) as connector:
         if cmd == "detect":
             await do_detect(connector)
         elif cmd == "info":

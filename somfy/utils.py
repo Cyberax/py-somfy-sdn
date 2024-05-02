@@ -20,7 +20,7 @@ class SomfyNackException(SomfyException):
         return self.nack_data
 
 
-async def move_with_ack(addr, connector: SomfyExchanger, to_sent: SomfyMessage):
+async def send_with_ack(addr, connector: SomfyExchanger, to_sent: SomfyMessage):
     ack_or_nack: typing.Optional[SomfyMessage] = None
 
     def filter_type(msg: SomfyMessage):
@@ -32,10 +32,10 @@ async def move_with_ack(addr, connector: SomfyExchanger, to_sent: SomfyMessage):
 
     try:
         await connector.exchange(to_sent, filter_type)
-        if ack_or_nack is None:
-            raise SomfyException("No ACK or NACK messages")
     except asyncio.TimeoutError:
-        raise SomfyException("Command timed out")
+        pass
+    if ack_or_nack is None:
+        raise SomfyException("No ACK or NACK messages received")
     if ack_or_nack.msgid == SomfyMessageId.NACK:
         raise SomfyNackException(typing.cast(NackPayload, ack_or_nack.payload))
     elif ack_or_nack.msgid != SomfyMessageId.ACK:
@@ -48,7 +48,7 @@ async def wait_for_completion(addr: SomfyAddress, connector: SomfyExchanger,
     last_change_time = loop.time()
     last_pulses = 0
     # Keep polling while the shades are moving
-    while loop.time() - last_change_time <= 1:
+    while loop.time() - last_change_time <= 1.5:
         reply = await try_to_exchange_one(connector, addr, SomfyMessageId.GET_MOTOR_POSITION,
                                           SomfyMessageId.POST_MOTOR_POSITION)
         if reply:
