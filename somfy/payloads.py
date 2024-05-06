@@ -516,7 +516,7 @@ class CtrlMoveForcedPayload(SomfyPayload):
         return {"direction": self.get_direction(), "tens_of_ms": self.get_tens_of_ms()}
 
     @staticmethod
-    def make(direction: int, tens_of_ms: int) -> 'CtrlMoveForcedPayload':
+    def make(direction: SomfyDirection, tens_of_ms: int) -> 'CtrlMoveForcedPayload':
         return CtrlMoveForcedPayload([direction, tens_of_ms & 0xFF, tens_of_ms >> 8 & 0xFF])
 
 
@@ -570,8 +570,8 @@ class SetMotorLimitsPayload(SomfyPayload):
         return {"function": self.get_function(), "direction": self.get_direction(), "parameter": self.get_parameter()}
 
     @staticmethod
-    def make(lower: int) -> 'SetMotorLimitsPayload':
-        return SetMotorLimitsPayload([0, 0, lower & 0xFF, lower >> 8 & 0xFF])
+    def make(func: SetLimitsFunction, direction: SomfyDirection, param: int) -> 'SetMotorLimitsPayload':
+        return SetMotorLimitsPayload([func, direction, param & 0xFF, param >> 8 & 0xFF])
 
 
 class PostMotorLimitsPayload(SomfyPayload):

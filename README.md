@@ -7,8 +7,9 @@ of SDN devices.
 # Using the library
 
 The library supports both directly-connected RS-485 adapters (typically implemented as USB-serial adapters), and
-connections via Ethernet-to-Serial converters. The library properly implements the timing restrictions specified
-in the SDN Integration Guide, with full `asyncio` support.
+connections via Ethernet-to-Serial converters. It's also possible to use Bluetooth USB-serial adapters to make 
+"wireless" shades. The library properly implements the timing restrictions specified in the SDN Integration Guide, 
+with full `asyncio` support.
 
 To use the library, create a connection factory, a connector, and then exchange the messages:
 
@@ -49,7 +50,9 @@ ID: 0C(GET_MOTOR_POSITION) FROM: 00(TYPE_ALL) 7F7F7F TO: 00(TYPE_ALL) 133DC6 ACK
 
 ## sdntool.py
 
-This tool can be used to detect devices in the SDN network, and to control shades. 
+This tool can be used to detect devices in the SDN network, and to control shades. It can even be used as a simple
+commissioning tool. It supports moving the shades past the limits (with `force_up/force_down` commands), 
+updating the limits, and controlling the rotation direction.
 
 Detecting:
 ```bash

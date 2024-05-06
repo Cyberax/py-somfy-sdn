@@ -34,7 +34,7 @@ async def sniff(opts):
 
     async with ReconnectingSomfyConnector(ch, sniffer_callback=on_message) as conn:
         try:
-            await conn.done_notification()
+            await conn.done_notification().wait()
         except asyncio.CancelledError:
             pass
 

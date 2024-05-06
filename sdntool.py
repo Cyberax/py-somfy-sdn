@@ -4,12 +4,13 @@ import typing
 from optparse import OptionParser
 
 from somfy.connector import SomfyConnector, SocketConnectionFactory, fire_and_forget, detect_devices, \
-    try_to_exchange_one, ReconnectingSomfyConnector
+    try_to_exchange_one
 from somfy.enumutils import hex_enum
 from somfy.messages import SomfyMessage, SomfyMessageId, MASTER_ADDRESS, NodeType, SomfyAddress
 from somfy.payloads import MotorRotationDirectionPayload, PostMotorLimitsPayload, PostMotorPositionPayload, \
     CtrlMoveToPayload, CtrlMoveToFunction, CtrlStopPayload, CtrlMoveRelativePayload, RelativeMoveFunction, \
-    PostMotorStatusPayload, SomfyNackReason, MotorRotationDirection
+    PostMotorStatusPayload, SomfyNackReason, MotorRotationDirection, CtrlMoveForcedPayload, SomfyDirection, \
+    SetMotorLimitsPayload, SetLimitsFunction
 from somfy.serial import SerialConnectionFactory
 from somfy.utils import wait_for_completion, SomfyNackException, send_with_ack
 
@@ -142,6 +143,41 @@ async def do_invert(connector: SomfyConnector, opts):
     await do_info(connector, opts)
 
 
+async def force_updown(connector: SomfyConnector, opts, move_down):
+    if not opts.addr:
+        raise Exception("No --addr specified")
+    if opts.millis is None:
+        raise Exception("No --millis specified")
+
+    addr = SomfyAddress.make(opts.addr)
+    payload = CtrlMoveForcedPayload.make(direction=SomfyDirection.DOWN if move_down else SomfyDirection.UP,
+                                         tens_of_ms=int(opts.millis) // 10)
+    forced = SomfyMessage(msgid=SomfyMessageId.CTRL_MOVE_FORCED, need_ack=True,
+                          from_node_type=NodeType.TYPE_ALL, from_addr=MASTER_ADDRESS,
+                          to_node_type=NodeType.TYPE_ALL, to_addr=addr, payload=payload)
+    await send_with_ack(addr, connector, forced)
+
+    def print_pos(p):
+        print("Position: %d%% (pulses: %d), IP=%d" % (p.get_position_percent(), p.get_position_pulses(),
+                                                      p.get_ip() or -1))
+
+    await wait_for_completion(addr, connector, print_pos)
+
+
+async def set_limit(connector: SomfyConnector, opts, lower):
+    if not opts.addr:
+        raise Exception("No --addr specified")
+
+    addr = SomfyAddress.make(opts.addr)
+    payload = SetMotorLimitsPayload.make(func=SetLimitsFunction.SET_AT_CURRENT,
+                                         direction=SomfyDirection.DOWN if lower else SomfyDirection.UP,
+                                         param=0)
+    forced = SomfyMessage(msgid=SomfyMessageId.SET_MOTOR_LIMITS, need_ack=True,
+                          from_node_type=NodeType.TYPE_ALL, from_addr=MASTER_ADDRESS,
+                          to_node_type=NodeType.TYPE_ALL, to_addr=addr, payload=payload)
+    await send_with_ack(addr, connector, forced)
+
+
 async def run(opts, cmd):
     if opts.tcp:
         host, port = opts.tcp.split(":")
@@ -151,7 +187,7 @@ async def run(opts, cmd):
     else:
         raise Exception("Neither --tcp nor --serial options specified")
 
-    async with ReconnectingSomfyConnector(ch) as connector:
+    async with SomfyConnector(ch) as connector:
         if cmd == "detect":
             await do_detect(connector)
         elif cmd == "info":
@@ -166,18 +202,29 @@ async def run(opts, cmd):
             await do_move_ip(connector, opts, False)
         elif cmd == "invert_direction":
             await do_invert(connector, opts)
+        elif cmd == "force_down":
+            await force_updown(connector, opts, True)
+        elif cmd == "force_up":
+            await force_updown(connector, opts, False)
+        elif cmd == "set_lower_limit":
+            await set_limit(connector, opts, True)
+        elif cmd == "set_upper_limit":
+            await set_limit(connector, opts, False)
         else:
             raise Exception("Unknown command")
 
 
 if __name__ == '__main__':
-    parser = OptionParser("sdntool.py [options] detect|info|move|stop|down_step|up_step|invert_direction")
+    parser = OptionParser(
+        "sdntool.py [options] detect|info|move|stop|down_step|up_step|"
+        "invert_direction|force_down|force_up|set_lower_limit|set_upper_limit")
     parser.add_option("--tcp", dest="tcp",
                       help="use the TCP endpoint for the Somfy connection (host:port)")
     parser.add_option("--serial", dest="serial",
                       help="use directly attached RS-485 serial device (/dev/tty<...>)")
     parser.add_option("--addr", dest="addr", help="The Somfy device address")
     parser.add_option("--percent", dest="percent", help="The percentage (0-100) for the move command")
+    parser.add_option("--millis", dest="millis", help="The number of milliseconds for the forced move commands")
     (options, args) = parser.parse_args()
 
     if len(args) == 0:
